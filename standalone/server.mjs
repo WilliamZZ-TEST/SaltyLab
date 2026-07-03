@@ -243,7 +243,11 @@ async function updateModelConfig(req, res) {
   const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
   const modelId = String(body.id || "").trim();
   if (!modelId) return json(res, 400, { error: "id is required" });
-  const existing = db.prepare("SELECT api_key AS apiKey FROM model_configs WHERE id = ?").get(modelId);
+  const existing = db.prepare(`
+    SELECT label, provider, model_id AS modelId, api_base AS apiBase, api_key AS apiKey, enabled, notes
+    FROM model_configs
+    WHERE id = ?
+  `).get(modelId);
   const apiKey = Object.prototype.hasOwnProperty.call(body, "apiKey")
     ? String(body.apiKey || "")
     : (existing?.apiKey || "");
@@ -261,13 +265,13 @@ async function updateModelConfig(req, res) {
       updated_at = CURRENT_TIMESTAMP
   `).run(
     modelId,
-    String(body.label || modelId),
-    String(body.provider || ""),
-    String(body.modelId || modelId),
-    String(body.apiBase || ""),
+    String(body.label ?? existing?.label ?? modelId),
+    String(body.provider ?? existing?.provider ?? ""),
+    String(body.modelId ?? existing?.modelId ?? modelId),
+    String(body.apiBase ?? existing?.apiBase ?? ""),
     apiKey,
-    body.enabled ? 1 : 0,
-    String(body.notes || "")
+    Object.prototype.hasOwnProperty.call(body, "enabled") ? (body.enabled ? 1 : 0) : (existing?.enabled ?? 1),
+    String(body.notes ?? existing?.notes ?? "")
   );
   handleModelConfigs(req, res);
 }

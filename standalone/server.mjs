@@ -48,6 +48,7 @@ db.exec(`
     provider TEXT NOT NULL,
     model_id TEXT NOT NULL,
     api_base TEXT,
+    api_key TEXT,
     enabled INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -59,6 +60,7 @@ try { db.exec("ALTER TABLE jobs ADD COLUMN count INTEGER NOT NULL DEFAULT 1"); }
 try { db.exec("ALTER TABLE jobs ADD COLUMN quality TEXT NOT NULL DEFAULT '精细'"); } catch {}
 try { db.exec("ALTER TABLE jobs ADD COLUMN points INTEGER NOT NULL DEFAULT 150"); } catch {}
 try { db.exec("ALTER TABLE jobs ADD COLUMN input_asset_ids TEXT NOT NULL DEFAULT '[]'"); } catch {}
+try { db.exec("ALTER TABLE model_configs ADD COLUMN api_key TEXT"); } catch {}
 
 const defaultModels = [
   ["image2", "GPT Image 2", "image2", "gpt-image-2", "", 1, "默认图片生成模型"],
@@ -224,10 +226,16 @@ function handleAdminSummary(_req, res) {
 
 function handleModelConfigs(_req, res) {
   const models = db.prepare(`
-    SELECT id, label, provider, model_id AS modelId, api_base AS apiBase, enabled, notes, updated_at AS updatedAt
+    SELECT id, label, provider, model_id AS modelId, api_base AS apiBase, api_key AS apiKey, enabled, notes, updated_at AS updatedAt
     FROM model_configs
     ORDER BY CASE id WHEN 'image2' THEN 1 WHEN 'nano-banana' THEN 2 WHEN 'seedream-5' THEN 3 ELSE 9 END
-  `).all().map((model) => ({ ...model, enabled: Boolean(model.enabled) }));
+  `).all().map((model) => ({
+    ...model,
+    apiKey: undefined,
+    hasKey: Boolean(model.apiKey),
+    maskedKey: model.apiKey ? `${model.apiKey.slice(0, 4)}...${model.apiKey.slice(-4)}` : "",
+    enabled: Boolean(model.enabled)
+  }));
   json(res, 200, { models });
 }
 
@@ -235,14 +243,19 @@ async function updateModelConfig(req, res) {
   const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
   const modelId = String(body.id || "").trim();
   if (!modelId) return json(res, 400, { error: "id is required" });
+  const existing = db.prepare("SELECT api_key AS apiKey FROM model_configs WHERE id = ?").get(modelId);
+  const apiKey = Object.prototype.hasOwnProperty.call(body, "apiKey")
+    ? String(body.apiKey || "")
+    : (existing?.apiKey || "");
   db.prepare(`
-    INSERT INTO model_configs (id, label, provider, model_id, api_base, enabled, notes, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    INSERT INTO model_configs (id, label, provider, model_id, api_base, api_key, enabled, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO UPDATE SET
       label = excluded.label,
       provider = excluded.provider,
       model_id = excluded.model_id,
       api_base = excluded.api_base,
+      api_key = excluded.api_key,
       enabled = excluded.enabled,
       notes = excluded.notes,
       updated_at = CURRENT_TIMESTAMP
@@ -252,10 +265,32 @@ async function updateModelConfig(req, res) {
     String(body.provider || ""),
     String(body.modelId || modelId),
     String(body.apiBase || ""),
+    apiKey,
     body.enabled ? 1 : 0,
     String(body.notes || "")
   );
   handleModelConfigs(req, res);
+}
+
+async function testModelConfig(req, res) {
+  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const modelId = String(body.id || "").trim();
+  const model = db.prepare(`
+    SELECT id, label, provider, model_id AS modelId, api_base AS apiBase, api_key AS apiKey, enabled
+    FROM model_configs
+    WHERE id = ?
+  `).get(modelId);
+  if (!model) return json(res, 404, { ok: false, error: "model config not found" });
+  if (!model.enabled) return json(res, 400, { ok: false, error: "model is disabled" });
+  if (!model.apiKey) return json(res, 400, { ok: false, error: "api key is missing" });
+  json(res, 200, {
+    ok: true,
+    model: model.label,
+    provider: model.provider,
+    modelId: model.modelId,
+    apiBase: model.apiBase,
+    message: "key config is present; live provider call is not executed in test mode"
+  });
 }
 
 async function serveStatic(req, res) {
@@ -280,6 +315,7 @@ createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/admin/summary") return handleAdminSummary(req, res);
     if (req.method === "GET" && req.url === "/api/admin/models") return handleModelConfigs(req, res);
     if (req.method === "POST" && req.url === "/api/admin/models") return updateModelConfig(req, res);
+    if (req.method === "POST" && req.url === "/api/admin/models/test") return testModelConfig(req, res);
     const assetMatch = req.url.match(/^\/api\/assets\/([^/?]+)/);
     if (req.method === "GET" && assetMatch) return handleAsset(req, res, assetMatch[1]);
     return serveStatic(req, res);

@@ -41,6 +41,17 @@ db.exec(`
     error TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS model_configs (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    api_base TEXT,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 try { db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard'"); } catch {}
@@ -48,6 +59,19 @@ try { db.exec("ALTER TABLE jobs ADD COLUMN count INTEGER NOT NULL DEFAULT 1"); }
 try { db.exec("ALTER TABLE jobs ADD COLUMN quality TEXT NOT NULL DEFAULT '精细'"); } catch {}
 try { db.exec("ALTER TABLE jobs ADD COLUMN points INTEGER NOT NULL DEFAULT 150"); } catch {}
 try { db.exec("ALTER TABLE jobs ADD COLUMN input_asset_ids TEXT NOT NULL DEFAULT '[]'"); } catch {}
+
+const defaultModels = [
+  ["image2", "GPT Image 2", "image2", "gpt-image-2", "", 1, "默认图片生成模型"],
+  ["nano-banana", "Nano Banana Pro Beta", "nano-banana", "nano-banana-pro", "", 1, "高清重绘与构图增强"],
+  ["seedream-5", "Seedream 5", "seedream", "seedream-5", "", 0, "预留新增模型入口"]
+];
+
+for (const model of defaultModels) {
+  db.prepare(`
+    INSERT OR IGNORE INTO model_configs (id, label, provider, model_id, api_base, enabled, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(...model);
+}
 
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -124,7 +148,7 @@ async function handleGenerate(req, res) {
       const url = new URL(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`);
       url.searchParams.set("width", sizeLabel.includes("1463") ? "1463" : "1024");
       url.searchParams.set("height", sizeLabel.includes("1463") ? "600" : "1536");
-      url.searchParams.set("model", modelLabel === "Nano Banana" ? "flux" : "turbo");
+      url.searchParams.set("model", modelLabel.includes("Nano") ? "flux" : "turbo");
       url.searchParams.set("seed", String(Date.now() + index));
       url.searchParams.set("nologo", "true");
       const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
@@ -198,6 +222,42 @@ function handleAdminSummary(_req, res) {
   });
 }
 
+function handleModelConfigs(_req, res) {
+  const models = db.prepare(`
+    SELECT id, label, provider, model_id AS modelId, api_base AS apiBase, enabled, notes, updated_at AS updatedAt
+    FROM model_configs
+    ORDER BY CASE id WHEN 'image2' THEN 1 WHEN 'nano-banana' THEN 2 WHEN 'seedream-5' THEN 3 ELSE 9 END
+  `).all().map((model) => ({ ...model, enabled: Boolean(model.enabled) }));
+  json(res, 200, { models });
+}
+
+async function updateModelConfig(req, res) {
+  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const modelId = String(body.id || "").trim();
+  if (!modelId) return json(res, 400, { error: "id is required" });
+  db.prepare(`
+    INSERT INTO model_configs (id, label, provider, model_id, api_base, enabled, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET
+      label = excluded.label,
+      provider = excluded.provider,
+      model_id = excluded.model_id,
+      api_base = excluded.api_base,
+      enabled = excluded.enabled,
+      notes = excluded.notes,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    modelId,
+    String(body.label || modelId),
+    String(body.provider || ""),
+    String(body.modelId || modelId),
+    String(body.apiBase || ""),
+    body.enabled ? 1 : 0,
+    String(body.notes || "")
+  );
+  handleModelConfigs(req, res);
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${port}`);
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -218,6 +278,8 @@ createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/jobs") return handleJobs(req, res);
     if (req.method === "GET" && req.url === "/api/assets") return handleAssets(req, res);
     if (req.method === "GET" && req.url === "/api/admin/summary") return handleAdminSummary(req, res);
+    if (req.method === "GET" && req.url === "/api/admin/models") return handleModelConfigs(req, res);
+    if (req.method === "POST" && req.url === "/api/admin/models") return updateModelConfig(req, res);
     const assetMatch = req.url.match(/^\/api\/assets\/([^/?]+)/);
     if (req.method === "GET" && assetMatch) return handleAsset(req, res, assetMatch[1]);
     return serveStatic(req, res);

@@ -1,17 +1,21 @@
 :root {
-  --bg: #282828;
-  --bg-deep: #101114;
-  --panel: rgba(255, 255, 255, 0.045);
-  --panel-strong: rgba(255, 255, 255, 0.07);
-  --title: #c76efa;
-  --text: #ffffff;
-  --muted: rgba(255, 255, 255, 0.72);
-  --line: rgba(255, 255, 255, 0.08);
-  --hover: #d48cff;
-  --cyan: #66e1d6;
-  --danger: #ff8080;
+  --bg: #171717;
+  --bg-deep: #151515;
+  --panel: #1e1e1e;
+  --panel-strong: #171717;
+  --title: #eeeeee;
+  --text: #eeeeee;
+  --muted: #bcbcbc;
+  --line: #3f3f3f;
+  --hover: #a78bfa;
+  --cyan: #4ade80;
+  --danger: #f87171;
+  --amethyst: #7c3aed;
+  --lavender: #a78bfa;
+  --tag: rgba(138, 92, 245, 0.15);
+  --glow: rgba(255, 255, 255, 0.05) 0 0 0 1px inset;
   --radius: 8px;
-  font-family: "Inter", "Noto Sans SC", system-ui, sans-serif;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Roboto, sans-serif;
   color: var(--text);
   background: var(--bg);
 }
@@ -656,4 +660,128 @@ label {
   .settings-panel {
     grid-column: 1 / -1;
   }
+}
+
+/* Obsidian visual system override */
+.app-shell,
+body {
+  background: #171717;
+  color: #eeeeee;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Roboto, sans-serif;
+  letter-spacing: -0.32px;
+}
+
+.backdrop {
+  background: #171717;
+}
+
+.video-bg {
+  opacity: 0;
+}
+
+.sidebar {
+  background: #151515;
+  border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+.brand-mark,
+.submit-ticket,
+.primary,
+.actions button.primary {
+  background: #7c3aed;
+  color: #ffffff;
+  box-shadow: rgba(255, 255, 255, 0.1) 0 0 0 1px inset;
+}
+
+.brand h1,
+.topbar h2 {
+  color: #eeeeee;
+  font-family: inherit;
+  font-weight: 700;
+  letter-spacing: -0.72px;
+}
+
+.brand p,
+.topbar p,
+a,
+.link {
+  color: #a78bfa;
+}
+
+.credit-box,
+.recent,
+.panel,
+.job-card,
+.output-strip,
+.modal-body {
+  border: 0;
+  border-radius: 12px;
+  background: #1e1e1e;
+  box-shadow: rgba(255, 255, 255, 0.05) 0 0 0 1px inset;
+}
+
+nav button,
+.chips button,
+.job-actions button,
+.job-actions a,
+.actions button,
+.modal-body a {
+  border: 0;
+  border-radius: 8px;
+  color: #bcbcbc;
+  background: transparent;
+  box-shadow: none;
+}
+
+nav button:hover,
+nav button.active,
+.chips button:hover,
+.job-actions button:hover,
+.job-actions a:hover,
+.actions button:hover {
+  color: #eeeeee;
+  background: rgba(167, 139, 250, 0.1);
+  box-shadow: rgba(255, 255, 255, 0.05) 0 0 0 1px inset;
+}
+
+.chips button,
+.pill,
+.badge {
+  border-radius: 9999px;
+  color: #a78bfa;
+  background: rgba(138, 92, 245, 0.15);
+}
+
+input,
+select,
+textarea {
+  border-color: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #eeeeee;
+  background: #171717;
+  box-shadow: rgba(255, 255, 255, 0.05) 0 0 0 1px inset;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #a78bfa;
+  box-shadow: rgba(167, 139, 250, 0.35) 0 0 0 1px inset;
+}
+
+.dropzone,
+.thumb,
+.result-card,
+.asset-card {
+  border-color: rgba(167, 139, 250, 0.45);
+  border-radius: 12px;
+  background: rgba(124, 58, 237, 0.08);
+  box-shadow: rgba(255, 255, 255, 0.05) 0 0 0 1px inset;
+}
+
+.mode-grid button.selected,
+.mode-grid button:hover {
+  color: #eeeeee;
+  background: rgba(124, 58, 237, 0.18);
+  box-shadow: rgba(167, 139, 250, 0.35) 0 0 0 1px inset;
 }

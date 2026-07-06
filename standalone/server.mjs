@@ -53,6 +53,17 @@ db.exec(`
     notes TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS admin_users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'operator',
+    status TEXT NOT NULL DEFAULT 'active',
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 try { db.exec("ALTER TABLE jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'standard'"); } catch {}
@@ -61,6 +72,11 @@ try { db.exec("ALTER TABLE jobs ADD COLUMN quality TEXT NOT NULL DEFAULT '精细
 try { db.exec("ALTER TABLE jobs ADD COLUMN points INTEGER NOT NULL DEFAULT 150"); } catch {}
 try { db.exec("ALTER TABLE jobs ADD COLUMN input_asset_ids TEXT NOT NULL DEFAULT '[]'"); } catch {}
 try { db.exec("ALTER TABLE model_configs ADD COLUMN api_key TEXT"); } catch {}
+try { db.exec("ALTER TABLE admin_users ADD COLUMN notes TEXT"); } catch {}
+
+function hashPassword(password) {
+  return crypto.createHash("sha256").update(String(password)).digest("hex");
+}
 
 const defaultModels = [
   ["image2", "GPT Image 2", "image2", "gpt-image-2", "", 1, "默认图片生成模型"],
@@ -75,6 +91,11 @@ for (const model of defaultModels) {
   `).run(...model);
 }
 
+db.prepare(`
+  INSERT OR IGNORE INTO admin_users (id, username, password_hash, role, status, notes)
+  VALUES (?, ?, ?, ?, ?, ?)
+`).run("admin_owner", "william", hashPassword("lancha2026"), "owner", "active", "default owner account");
+
 function id(prefix) {
   return `${prefix}_${crypto.randomUUID()}`;
 }
@@ -82,6 +103,16 @@ function id(prefix) {
 function json(res, status, body) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*" });
   res.end(JSON.stringify(body));
+}
+
+function parseJson(buffer) {
+  try {
+    return JSON.parse(buffer.toString("utf8") || "{}");
+  } catch {
+    const err = new Error("Invalid JSON body");
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 function readBody(req) {
@@ -129,8 +160,9 @@ function pointsForMode(mode) {
 }
 
 async function handleGenerate(req, res) {
-  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const body = parseJson(await readBody(req));
   const prompt = String(body.prompt || "Amazon A+ ecommerce banner").trim();
+  if (prompt.length > 3000) return json(res, 400, { error: "prompt is too long" });
   const modelLabel = String(body.modelLabel || "Image 2");
   const sizeLabel = String(body.sizeLabel || "Amazon A+ 1463x600");
   const mode = String(body.mode || "standard");
@@ -172,10 +204,15 @@ async function handleGenerate(req, res) {
 }
 
 async function handleUpload(req, res) {
-  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const body = parseJson(await readBody(req));
+  if (!Array.isArray(body.images)) return json(res, 400, { error: "images must be an array" });
+  if (body.images.length > 12) return json(res, 400, { error: "too many images" });
   const assets = [];
   for (const image of body.images || []) {
+    if (!String(image.mimeType || "").startsWith("image/")) return json(res, 400, { error: "unsupported file type" });
     const data = Buffer.from(String(image.data || ""), "base64");
+    if (!data.length) return json(res, 400, { error: "empty image payload" });
+    if (data.length > 20 * 1024 * 1024) return json(res, 413, { error: "image is larger than 20MB" });
     const assetId = insertAsset({
       kind: "upload",
       filename: image.filename || `${id("upload")}.png`,
@@ -214,14 +251,62 @@ function handleAdminSummary(_req, res) {
   const jobCount = db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count;
   const assetCount = db.prepare("SELECT COUNT(*) AS count FROM assets").get().count;
   const bytes = db.prepare("SELECT COALESCE(SUM(size_bytes),0) AS bytes FROM assets").get().bytes;
+  const userCount = db.prepare("SELECT COUNT(*) AS count FROM admin_users").get().count;
   json(res, 200, {
-    users: [
-      { id: "user_owner", name: "William", email: "william@lancha.test", role: "owner", credits: 42860, status: "active" },
-      { id: "user_designer", name: "Designer", email: "designer@lancha.test", role: "operator", credits: 12000, status: "active" },
-      { id: "user_api", name: "API Bot", email: "api@lancha.test", role: "api-only", credits: 8000, status: "limited" }
-    ],
-    metrics: { jobCount, assetCount, bytes, apiKeys: 2 }
+    users: listAdminUsers(),
+    metrics: { jobCount, assetCount, bytes, apiKeys: 2, userCount }
   });
+}
+
+function listAdminUsers() {
+  return db.prepare(`
+    SELECT id, username, role, status, notes, created_at AS createdAt, updated_at AS updatedAt
+    FROM admin_users
+    ORDER BY created_at DESC
+  `).all();
+}
+
+function handleAdminUsers(_req, res) {
+  json(res, 200, { users: listAdminUsers() });
+}
+
+async function upsertAdminUser(req, res) {
+  const body = parseJson(await readBody(req));
+  const username = String(body.username || "").trim();
+  const password = String(body.password || "");
+  const role = String(body.role || "operator").trim() || "operator";
+  const status = String(body.status || "active").trim() || "active";
+  const notes = String(body.notes || "").trim();
+  let userId = String(body.id || "").trim();
+  if (!username) return json(res, 400, { error: "username is required" });
+  if (username.length < 3) return json(res, 400, { error: "username must be at least 3 characters" });
+  const existing = db.prepare("SELECT id, password_hash AS passwordHash FROM admin_users WHERE id = ? OR username = ?").get(userId, username);
+  userId = userId || existing?.id || id("admin");
+  if (!existing && password.length < 6) return json(res, 400, { error: "password must be at least 6 characters" });
+  const passwordHash = password ? hashPassword(password) : existing.passwordHash;
+  db.prepare(`
+    INSERT INTO admin_users (id, username, password_hash, role, status, notes, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET
+      username = excluded.username,
+      password_hash = excluded.password_hash,
+      role = excluded.role,
+      status = excluded.status,
+      notes = excluded.notes,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(userId, username, passwordHash, role, status, notes);
+  json(res, 200, { users: listAdminUsers() });
+}
+
+async function deleteAdminUser(req, res) {
+  const body = parseJson(await readBody(req));
+  const userId = String(body.id || "").trim();
+  if (!userId) return json(res, 400, { error: "id is required" });
+  const count = db.prepare("SELECT COUNT(*) AS count FROM admin_users WHERE status = 'active'").get().count;
+  const target = db.prepare("SELECT status FROM admin_users WHERE id = ?").get(userId);
+  if (target?.status === "active" && count <= 1) return json(res, 400, { error: "cannot delete the last active admin user" });
+  db.prepare("DELETE FROM admin_users WHERE id = ?").run(userId);
+  json(res, 200, { users: listAdminUsers() });
 }
 
 function handleModelConfigs(_req, res) {
@@ -240,7 +325,7 @@ function handleModelConfigs(_req, res) {
 }
 
 async function updateModelConfig(req, res) {
-  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const body = parseJson(await readBody(req));
   const modelId = String(body.id || "").trim();
   if (!modelId) return json(res, 400, { error: "id is required" });
   const existing = db.prepare(`
@@ -277,7 +362,7 @@ async function updateModelConfig(req, res) {
 }
 
 async function testModelConfig(req, res) {
-  const body = JSON.parse((await readBody(req)).toString("utf8") || "{}");
+  const body = parseJson(await readBody(req));
   const modelId = String(body.id || "").trim();
   const model = db.prepare(`
     SELECT id, label, provider, model_id AS modelId, api_base AS apiBase, api_key AS apiKey, enabled
@@ -317,6 +402,9 @@ createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/jobs") return handleJobs(req, res);
     if (req.method === "GET" && req.url === "/api/assets") return handleAssets(req, res);
     if (req.method === "GET" && req.url === "/api/admin/summary") return handleAdminSummary(req, res);
+    if (req.method === "GET" && req.url === "/api/admin/users") return handleAdminUsers(req, res);
+    if (req.method === "POST" && req.url === "/api/admin/users") return upsertAdminUser(req, res);
+    if (req.method === "POST" && req.url === "/api/admin/users/delete") return deleteAdminUser(req, res);
     if (req.method === "GET" && req.url === "/api/admin/models") return handleModelConfigs(req, res);
     if (req.method === "POST" && req.url === "/api/admin/models") return updateModelConfig(req, res);
     if (req.method === "POST" && req.url === "/api/admin/models/test") return testModelConfig(req, res);
@@ -324,7 +412,7 @@ createServer(async (req, res) => {
     if (req.method === "GET" && assetMatch) return handleAsset(req, res, assetMatch[1]);
     return serveStatic(req, res);
   } catch (err) {
-    return json(res, 500, { error: err.message });
+    return json(res, err.statusCode || 500, { error: err.message });
   }
 }).listen(port, "127.0.0.1", () => {
   console.log(`Standalone Image Studio running at http://127.0.0.1:${port}/`);
